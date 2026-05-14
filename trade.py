@@ -24,6 +24,7 @@ CONTRACT_ID = "CON.F.US.HE.M26"
 MARKET_HUB = f"https://rtc.topstepx.com/hubs/market"
 CONTRACT_SIZE = 1
 TICK_SIZE = 0.025
+MIN_TICK_TRADE = 4
 
 order_made = False
 
@@ -199,7 +200,7 @@ def process_bars():
             "size": CONTRACT_SIZE,
             "limitPrice": entry_price,
             "takeProfitBracket": {
-                "ticks": tp_ticks,
+                "ticks": -1 * max(tp_ticks, MIN_TICK_TRADE),
                 "type": 1
             }
         }
@@ -219,7 +220,7 @@ def process_bars():
         wait_for_fill_or_cancel(
             account_id=ACCOUNT_ID,
             order_id=order_id,
-            timeout_seconds=5 * 60,
+            timeout_seconds=10 * 60,
             poll_seconds=5,
         )
 
@@ -241,7 +242,7 @@ def process_bars():
             "size": CONTRACT_SIZE,
             "limitPrice": entry_price,
             "takeProfitBracket": {
-                "ticks": tp_ticks,
+                "ticks": max(tp_ticks, MIN_TICK_TRADE),
                 "type": 1
             }
         }
@@ -261,7 +262,7 @@ def process_bars():
         wait_for_fill_or_cancel(
             account_id=ACCOUNT_ID,
             order_id=order_id,
-            timeout_seconds=3 * 60,
+            timeout_seconds=10 * 60,
             poll_seconds=5,
         )
 
