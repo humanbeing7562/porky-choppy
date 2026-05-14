@@ -139,7 +139,7 @@ def wait_for_fill_or_cancel(account_id, order_id, timeout_seconds=300, poll_seco
     return "cancelled"
 
 def round_to_tick(price, tick_size=TICK_SIZE):
-    return round(price / tick_size) * tick_size
+    return round(round(price / tick_size) * tick_size, 10)
 
 def price_diff_to_ticks(price_diff, tick_size=TICK_SIZE):
     return int(round(abs(price_diff) / tick_size))
