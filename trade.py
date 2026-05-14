@@ -13,13 +13,19 @@ import time
 from datetime import datetime, timezone, timedelta
 
 load_dotenv()
-pd.set_option('display.max_rows', None)
 
 API_KEY = os.getenv("PROJECT_X_API_KEY")
 USER_NAME = os.getenv("PROJECT_X_USERNAME")
 JWT_TOKEN = requests.post("https://api.topstepx.com/api/Auth/loginKey", json={"userName": USER_NAME, "apiKey": API_KEY}).json()["token"]
+ACCOUNTS = requests.post(f"https://api.topstepx.com/api/Account/Search", headers={"Authorization": f"Bearer {JWT_TOKEN}", "Content-Type": "application/json", "Accept": "text/plain"}, json={"onlyActiveAccounts": True}).json()['accounts']
+ACCOUNT_ID = ACCOUNTS[1]['id']
+print(ACCOUNTS[1]['balance'])
 CONTRACT_ID = "CON.F.US.HE.M26"
 MARKET_HUB = f"https://rtc.topstepx.com/hubs/market"
+CONTRACT_SIZE = 1
+TICK_SIZE = 0.025
+
+order_made = False
 
 token = JWT_TOKEN
 
@@ -56,12 +62,95 @@ def classify_candle(bar):
 
 bars = {}
 
+def get_open_orders(account_id):
+    r = requests.post(
+        "https://api.topstepx.com/api/Order/searchOpen",
+        headers={
+            "Authorization": f"Bearer {JWT_TOKEN}",
+            "Content-Type": "application/json",
+            "Accept": "text/plain",
+        },
+        json={
+            "accountId": account_id,
+        },
+    )
+
+    print("open orders status:", r.status_code)
+    print("open orders text:", r.text)
+
+    data = r.json()
+
+    if not data.get("success"):
+        raise RuntimeError(data)
+
+    return data.get("orders", [])
+
+
+def is_order_still_open(account_id, order_id):
+    open_orders = get_open_orders(account_id)
+
+    for order in open_orders:
+        if order["id"] == order_id:
+            return True
+
+    return False
+
+
+def cancel_order(account_id, order_id):
+    r = requests.post(
+        "https://api.topstepx.com/api/Order/cancel",
+        headers={
+            "Authorization": f"Bearer {JWT_TOKEN}",
+            "Content-Type": "application/json",
+            "Accept": "text/plain",
+        },
+        json={
+            "accountId": account_id,
+            "orderId": order_id,
+        },
+    )
+
+    print("cancel status:", r.status_code)
+    print("cancel text:", r.text)
+
+    data = r.json()
+
+    if not data.get("success"):
+        raise RuntimeError(data)
+
+    return data
+
+
+def wait_for_fill_or_cancel(account_id, order_id, timeout_seconds=300, poll_seconds=5):
+    start = time.time()
+
+    while time.time() - start < timeout_seconds:
+        if not is_order_still_open(account_id, order_id):
+            print("Order is no longer open. It was probably filled/cancelled/rejected.")
+            return "not_open"
+
+        elapsed = time.time() - start
+        print(f"Order still open. Elapsed: {elapsed:.0f}s")
+
+        time.sleep(poll_seconds)
+
+    print("Order still open after timeout. Cancelling...")
+    cancel_order(account_id, order_id)
+    return "cancelled"
+
+def round_to_tick(price, tick_size=TICK_SIZE):
+    return round(price / tick_size) * tick_size
+
+def price_diff_to_ticks(price_diff, tick_size=TICK_SIZE):
+    return int(round(abs(price_diff) / tick_size))
+
 current_minute = None
 
 def get_bar_mid_price(bar):
     return (bar["open"] + bar["close"]) / 2
 
 def process_bars():
+
     direction_info = find_first_two_same_direction(bars)
 
     if direction_info is None:
@@ -77,6 +166,9 @@ def process_bars():
     break_bar = break_info["break_bar"]
     entry_price = get_bar_mid_price(break_bar)
     take_profit = bars[direction_info["first_bucket"]]["open"]
+
+    entry_price = round_to_tick(entry_price)
+    take_profit = round_to_tick(take_profit)
 
     signal = {
         "original_direction": direction_info["direction"],
@@ -98,9 +190,39 @@ def process_bars():
             exit()
 
         print("VALID SHORT SETUP")
-        # PLACE SELL LIMIT ORDER HERE
-        # entry_price = break mid
-        # take_profit = first streak candle open
+        tp_ticks = price_diff_to_ticks(entry_price - take_profit)
+        data = {
+            "accountId": ACCOUNT_ID,
+            "contractId": CONTRACT_ID,
+            "type": 1,
+            "side": 1,
+            "size": CONTRACT_SIZE,
+            "limitPrice": entry_price,
+            "takeProfitBracket": {
+                "ticks": tp_ticks,
+                "type": 1
+            }
+        }
+        create_order = requests.post("https://api.topstepx.com/api/Order/Place", headers={"Authorization": f"Bearer {JWT_TOKEN}", "Content-Type": "application/json", "Accept": "text/plain"}, json=data)
+        print(create_order.status_code)
+        print(create_order.json())
+
+        order_response = create_order.json()
+
+        if not order_response.get("success"):
+            print("Order failed:", order_response)
+            exit()
+
+        order_id = order_response["orderId"]
+        print("Placed order:", order_id)
+
+        wait_for_fill_or_cancel(
+            account_id=ACCOUNT_ID,
+            order_id=order_id,
+            timeout_seconds=5 * 60,
+            poll_seconds=5,
+        )
+
         exit()
     elif break_info["break_direction"] == "up":
         # For long: TP should be above entry
@@ -109,9 +231,40 @@ def process_bars():
             exit()
 
         print("VALID LONG SETUP")
+        tp_ticks = price_diff_to_ticks(take_profit - entry_price)
         # PLACE BUY LIMIT ORDER HERE
-        # entry_price = break mid
-        # take_profit = first streak candle open
+        data = {
+            "accountId": ACCOUNT_ID,
+            "contractId": CONTRACT_ID,
+            "type": 1,
+            "side": 0,
+            "size": CONTRACT_SIZE,
+            "limitPrice": entry_price,
+            "takeProfitBracket": {
+                "ticks": tp_ticks,
+                "type": 1
+            }
+        }
+        create_order = requests.post("https://api.topstepx.com/api/Order/Place", headers={"Authorization": f"Bearer {JWT_TOKEN}", "Content-Type": "application/json", "Accept": "text/plain"}, json=data)
+        print(create_order.status_code)
+        print(create_order.json())
+
+        order_response = create_order.json()
+
+        if not order_response.get("success"):
+            print("Order failed:", order_response)
+            exit()
+
+        order_id = order_response["orderId"]
+        print("Placed order:", order_id)
+
+        wait_for_fill_or_cancel(
+            account_id=ACCOUNT_ID,
+            order_id=order_id,
+            timeout_seconds=3 * 60,
+            poll_seconds=5,
+        )
+
         exit()
 
     return signal
@@ -236,6 +389,7 @@ def wait_until_next_minute():
     print(f"Waiting {sleep_seconds:.2f}s until next minute:", next_minute)
 
     time.sleep(sleep_seconds)
+    print("WAIT IS OVER. TIME TO MAKE MONIES")
 
 def on_depth(*args):
     print("DEPTH:", args)
