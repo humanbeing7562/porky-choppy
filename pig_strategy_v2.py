@@ -5,6 +5,41 @@ FILENAME = "PIGS_2016-05-01_to_2026-05-01.parquet"
 
 df = pd.read_parquet(FILENAME)
 
+def calculate_max_drawdown_ticks(action, entry_price, highs, lows, entry_index, exit_index, tick_size):
+    """
+    Maximum adverse movement while trade is open.
+
+    Long:
+        adverse move = entry_price - lowest low
+
+    Short:
+        adverse move = highest high - entry_price
+    """
+
+    highs_during_trade = highs[entry_index:exit_index + 1]
+    lows_during_trade = lows[entry_index:exit_index + 1]
+
+    if len(highs_during_trade) == 0 or len(lows_during_trade) == 0:
+        return 0, None, None
+
+    if action == "long":
+        worst_price = min(lows_during_trade)
+        worst_index_offset = lows_during_trade.index(worst_price)
+        max_drawdown_ticks = (entry_price - worst_price) / tick_size
+
+    elif action == "short":
+        worst_price = max(highs_during_trade)
+        worst_index_offset = highs_during_trade.index(worst_price)
+        max_drawdown_ticks = (worst_price - entry_price) / tick_size
+
+    else:
+        return 0, None, None
+
+    worst_index = entry_index + worst_index_offset
+    max_drawdown_ticks = max(0, max_drawdown_ticks)
+
+    return max_drawdown_ticks, worst_price, worst_index
+
 START_DATE = "2025-05-01"
 END_DATE = "2026-05-01"
 
@@ -84,6 +119,7 @@ for _, row in daily.iterrows():
 
             if length >= 2 and bars[start] != "neutral":
                 result = {
+                    "session_date": row["session_date"],
                     "bar": bars[start],
                     "enter_price": (closes[end+1] + opens[end+1])/2,
                     "action": "long" if bars[start] == "red" else "short",
@@ -120,18 +156,29 @@ for _, row in daily.iterrows():
 
     if tp_hit:
         win += 1
+
         result["tp_hit"] = int(tp_hit)
         result["tp_hit_index"] = tp_hit_index
         result["tp_hit_time"] = tp_hit_time
+        result["exit_price"] = take_profit
+        result["exit_time"] = tp_hit_time
+        result["exit_reason"] = "take_profit"
+
         if result["action"] == "long":
-            result["profit"] = (take_profit - result["enter_price"])/TICK_SIZE
+            result["profit"] = (take_profit - result["enter_price"]) / TICK_SIZE
         elif result["action"] == "short":
-            result["profit"] = (result["enter_price"] - take_profit)/TICK_SIZE
-        
+            result["profit"] = (result["enter_price"] - take_profit) / TICK_SIZE
+
+        result["loss"] = 0
+        exit_index = tp_hit_index
+
     else:
         result["tp_hit"] = int(tp_hit)
-        final_close = closes[-10]
-        final_close_time = day_df.index[-10]
+
+        exit_index = len(day_df) - 10 if len(day_df) >= 10 else len(day_df) - 1
+
+        final_close = closes[exit_index]
+        final_close_time = day_df.index[exit_index]
 
         result["exit_price"] = final_close
         result["exit_time"] = final_close_time
@@ -151,6 +198,22 @@ for _, row in daily.iterrows():
             result["loss"] = abs(pnl)
             loss += 1
 
+
+    max_dd_ticks, max_dd_price, max_dd_index = calculate_max_drawdown_ticks(
+        action=result["action"],
+        entry_price=result["enter_price"],
+        highs=highs,
+        lows=lows,
+        entry_index=entry_index,
+        exit_index=exit_index,
+        tick_size=TICK_SIZE,
+    )
+
+    result["max_drawdown_ticks"] = max_dd_ticks
+    result["max_drawdown_price"] = max_dd_price
+    result["max_drawdown_index"] = max_dd_index
+    result["max_drawdown_time"] = day_df.index[max_dd_index] if max_dd_index is not None else pd.NaT
+    
     results.append(result)
     
 print("Total wins:", win)
@@ -165,24 +228,45 @@ max_profit = 0
 max_loss = 0
 
 for result in results:
-    if result["tp_hit"] == 1:
-        total_profits += result["profit"]
-        if result["profit"] > max_profit:
-            max_profit = result["profit"]
-        
-    else:
-        total_profits += result["profit"]
-        total_losses += result["loss"]
-        if result["profit"] > max_profit:
-            max_profit = result["profit"]
-        if result["loss"] > max_loss:
-            max_loss = result["loss"]
+    profit = result.get("profit", 0)
+    loss_amount = result.get("loss", 0)
 
+    total_profits += profit
+    total_losses += loss_amount
+
+    if profit > max_profit:
+        max_profit = profit
+
+    if loss_amount > max_loss:
+        max_loss = loss_amount
+
+    print("session_date:", result.get("session_date"))
+    print("action:", result.get("action"))
+    print("profit:", profit)
+    print("loss:", loss_amount)
+    print("max_drawdown_ticks:", result.get("max_drawdown_ticks"))
+    print("max_drawdown_price:", result.get("max_drawdown_price"))
+    print("max_drawdown_time:", result.get("max_drawdown_time"))
     print("cumulative profit:", total_profits)
     print("cumulative losses:", total_losses)
+    print("------------------------------------------------")
 
 print("Total profits:", total_profits)
 print("Total losses:", total_losses)
 print("Maximum profit:", max_profit)
 print("Maximum loss:", max_loss)      
 
+if len(results) > 0:
+    results_df = pd.DataFrame(results)
+
+    print("Win rate:", results_df["tp_hit"].mean())
+    print("Average profit ticks:", results_df["profit"].mean())
+    print("Average loss ticks:", results_df["loss"].mean())
+    print("Average net ticks per trade:", (results_df["profit"] - results_df["loss"]).mean())
+
+    # Optional: save results
+    output_file = f"le_strategy_results.csv"
+    results_df.to_csv(output_file, index=False)
+    print("Saved results to:", output_file)
+else:
+    print("No trades generated.")
