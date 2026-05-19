@@ -20,7 +20,7 @@ JWT_TOKEN = requests.post("https://api.topstepx.com/api/Auth/loginKey", json={"u
 ACCOUNTS = requests.post(f"https://api.topstepx.com/api/Account/Search", headers={"Authorization": f"Bearer {JWT_TOKEN}", "Content-Type": "application/json", "Accept": "text/plain"}, json={"onlyActiveAccounts": True}).json()['accounts']
 ACCOUNT_ID = ACCOUNTS[1]['id']
 print(ACCOUNTS[1]['balance'])
-CONTRACT_ID = "CON.F.US.HE.M26"
+CONTRACT_ID = "CON.F.US.HE.N26"
 MARKET_HUB = f"https://rtc.topstepx.com/hubs/market"
 CONTRACT_SIZE = 1
 TICK_SIZE = 0.025
@@ -377,8 +377,9 @@ def update_bar(trade):
 def on_trade(*args):
     payload = args[0]
     trades = payload[1]
-
+    print(payload)
     for trade in trades:
+        print(trade)
         update_bar(trade)
 
 def wait_until_next_minute():
