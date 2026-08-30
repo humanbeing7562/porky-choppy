@@ -1,16 +1,9 @@
-import pandas as pd
-import logging
 import os
 import time
-from pathlib import Path
 import requests
 from datetime import datetime, timedelta, timezone
-import pandas as pd
-import holidays
 from signalrcore.hub_connection_builder import HubConnectionBuilder
 from dotenv import load_dotenv
-import time
-from datetime import datetime, timezone, timedelta
 
 load_dotenv()
 

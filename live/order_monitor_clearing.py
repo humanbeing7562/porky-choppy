@@ -53,11 +53,7 @@ def headers():
     }
 
 
-def get_account_id():
-    return "22939567"
-
-
-ACCOUNT_ID = get_account_id()
+ACCOUNT_ID = os.getenv("PROJECT_X_ACCOUNT_ID")
 
 
 def is_force_exit_time():
